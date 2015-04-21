@@ -2,6 +2,22 @@
 # -*- coding: utf-8 -*-
 from sets import Set
 import copy
+import random
+import operator
+import math
+
+from collections import namedtuple
+
+class ColorClass:
+	def __init__(self):
+		self.nodes = []
+		self.size = 0
+		self.clashing_nodes = 0
+	def cost(self):
+		return 2 * self.size * self.clashing_nodes - math.pow(self.size, 2)	
+
+	def __str__(self):
+		return "colorClass: nodes = {ns}, size = {s}, clashing = {cl}".format(ns = self.nodes, s = self.size, cl = self.clashing_nodes) 
 
 #define nodes in the graph
 class Node:
@@ -12,29 +28,33 @@ class Node:
 		self.ignore = []
 		self.color = -1
 		# this array holds available colors for the node
-		self.colorVals = []
-		# this field is used to keep track of paths when traversing the search tree; it facilitates backtracking
-		self.parent = 0
+		self.color_vals = []
+		# keep track of how many neghibors fall under each color
+		# this makes it easier to keep track of the cost
+		# self.neighbor_colors = {}
 
 	def __str__(self):
 		out = ""
 		for n in self.neighbors:
-			out = out + str(n.name)+ ","
-		return "Node(name = {n}, color = {c}, color_range = {r})'s neighbors:".format(n = self.name, c = self.color, r = self.colorVals)+"\n"+out+"\n"
+			out = out + str(n)+ ","
+		return "Node(name = {n}, color = {c}, color_range = {r})'s neighbors:".format(n = self.name, c = self.color, r = self.color_vals)+"\n"+out+"\n"
 
 	# choose the next available value in your color set
-	def nextColor(self):
-		if len(self.colorVals) > 0:
-			col = self.colorVals[0]
-			self.colorVals = self.colorVals[1:]
+	def next_color(self):
+		if len(self.color_vals) > 0:
+			col = self.color_vals[0]
+			self.color_vals = self.color_vals[1:]
 			return col
 		else:
 			return -1
 
 	# remove a color value from your set of colors
-	def pruneColor(self, col):
-		if col in self.colorVals:
-			self.colorVals.remove(col)
+	def prune_color(self, col):
+		if col in self.color_vals:
+			self.color_vals.remove(col)	
+
+	def set_max_color(self, color):
+		self.color_vals = range(0, color)					
 
 #define graph as a dictionary of nodes
 class Graph:
@@ -42,6 +62,8 @@ class Graph:
 		self.nodes = {}
 		self.node_count = nc
 		self.edge_count = ec
+		self.color_classes = {}
+		self.current_cost = sys.maxint
 		# initially, the lower bound on the chromatic number of the graph is set to zero
 		# later, the largest clique found in the graph will repalce this value
 		self.bound = 0
@@ -52,14 +74,14 @@ class Graph:
 			out = out + self.nodes[nodeName].__str__()
 		return "Graph(node_count = {nc}, edge_count = {ec}) has these nodes:".format(nc = self.node_count, ec = self.edge_count)+"\n"+out
 		
-	def setBound(self, bound):
+	def set_bound(self, bound):
 		self.bound = bound
 		for n in self.nodes:
-			self.nodes[n].colorVals = list(range(0, self.bound))
+			self.nodes[n].color_vals = list(range(0, self.bound))
 			self.nodes[n].color = -1
 			self.nodes[n].ignore = [False] * len(self.nodes[n].neighbors)
 
-	def findMaxColors(self):
+	def find_max_colors(self):
 		maxCols = 0
 		for n in self.nodes:
 			if self.nodes[n].color > maxCols:
@@ -67,10 +89,9 @@ class Graph:
 		return maxCols + 1
 
 	# given a recently colored node, remove its color from the set of legitimate colors from all of its neighbors
-	def pruneColors(self, nodeName, nodeColor):
+	def prune_colors(self, nodeName, nodeColor):
 		for n in self.nodes[nodeName].neighbors:
-			n.pruneColor(nodeColor)
-			self.nodes[n.name].pruneColor(nodeColor)
+			self.nodes[n].prune_color(nodeColor)
 
 	# pivot-based Bron-Kerbosch algorithm for finding cliques in the graph
 	def BronKerbosch(self, R, P, X):
@@ -79,7 +100,7 @@ class Graph:
 			for n in self.nodes:
 				if self.nodes[n].name in R:
 					for i in range(0, len(self.nodes[n].neighbors)):
-						if self.nodes[n].neighbors[i].name in R:
+						if self.nodes[n].neighbors[i] in R:
 							self.nodes[n].ignore[i] = True
 			return R
 		#choose a pivot vertex u in P ⋃ X
@@ -87,19 +108,19 @@ class Graph:
 		Nu = Set([])
 		for i in range(0, len(self.nodes[u].neighbors)):
 			if not self.nodes[u].ignore[i]:
-				Nu.add(self.nodes[u].neighbors[i].name)
+				Nu.add(self.nodes[u].neighbors[i])
 		for v in  P - Nu:
 			Sv = Set([v])
 			Nv = Set([])
 			for i in range(0, len(self.nodes[v].neighbors)):
 				if not self.nodes[v].ignore[i]:
-					Nv.add(self.nodes[v].neighbors[i].name)
+					Nv.add(self.nodes[v].neighbors[i])
 			return self.BronKerbosch(R.union(Sv), P.intersection(Nv), X.intersection(Nv))
 			P = P - Sv
 			X = X.union(Sv)
 
 	# find a max clique in the graph using Bron-Kerbosch's algorithm
-	def nextClique(self):
+	def next_clique(self):
 		R = Set([])
 		P = Set([])
 		X = Set([])
@@ -109,22 +130,91 @@ class Graph:
 		return clique
 
 	# given a clique, color it with varying colors
-	def colorClique(self, clique, nodes):
+	def color_clique(self, clique, nodes):
 		for n in clique:
 			if self.nodes[n] in nodes:
-				self.nodes[n].color = self.nodes[n].nextColor()
-				self.pruneColors(n, self.nodes[n].color)
+				self.nodes[n].color = self.nodes[n].next_color()
+				self.prune_colors(n, self.nodes[n].color)
 				nodes.remove(self.nodes[n])
 
-	def isSolved(self):
+	def is_solved(self):
 		for n in self.nodes:
 			if self.nodes[n].color == -1:
 				return False
 		return True
 
+	def is_feasible(self):	
+		for c in self.color_classes:
+			if self.color_classes[c].clashing_nodes > 0:
+				return False
+		return True	
+
+	def populate_color_classes(self):
+		for c in range(0, self.bound + 1 ):
+			self.color_classes[c] = ColorClass()
+		for n in self.nodes:
+			node = self.nodes[n]
+			color_class = self.color_classes[node.color]
+			color_class.nodes.append(node.name)
+			color_class.size += 1
+		for cc in self.color_classes:
+			for i in range(0, len(self.color_classes[cc].nodes)):
+				for j in range(i+1, len(self.color_classes[cc].nodes)):
+					if self.color_classes[cc].nodes[j] in self.nodes[self.color_classes[cc].nodes[i]].neighbors:
+						self.color_classes[cc].clashing_nodes += 1	
+		for c in self.color_classes:
+			print c , " --> " , self.color_classes[c]					
+		self.set_new_cost()			
+
+	def randomly_initialize(self):
+		for n in self.nodes:
+			node = self.nodes[n]
+			random_color = random.choice(range(0, self.bound))
+			node.color = random_color
+		self.populate_color_classes()	
+
+	def set_new_cost(self):
+		ct = 0
+		cc = self.color_classes
+		for c in cc:
+			ct += cc[c].cost()
+		self.current_cost = ct	
+
+	def mutate(self, node, col):
+		node = self.nodes[node.name]
+		# old_node = copy.deepcopy(new_node)
+		self.remove_color_sets(node)
+		node.color = col
+		self.add_color_sets(node)
+		self.set_new_cost()
+		# return old_node
+
+	def remove_color_sets(self, node):
+		self.color_classes[node.color].nodes.remove(node.name)	
+		self.color_classes[node.color].size -= 1
+		for r in node.neighbors:
+			if r in self.color_classes[node.color].nodes:
+				self.color_classes[node.color].clashing_nodes -= 1	
+
+	def add_color_sets(self, node):
+		self.color_classes[node.color].nodes.append(node.name)
+		self.color_classes[node.color].size += 1
+		for r in node.neighbors:
+			if r in self.color_classes[node.color].nodes:
+				self.color_classes[node.color].clashing_nodes += 1
+
+	# def find_clashing(self, name, color):
+	# 	cl = 0
+	# 	for n in self.color_classes[color].nodes:
+	# 		if n in self.nodes[name].neighbors:
+	# 			cl += 1
+	# 	return cl		
+
+
+
 
 # generate a list of nodes which can be sorted by the number of each node's neighbors, or by the number of its available colors
-def genNodes(graph):
+def gen_nodes(graph):
 	nodesBySize = []
 	for x in graph.nodes:
 		nodesBySize.append(graph.nodes[x])
@@ -137,7 +227,7 @@ def reset(nodesBySize, graph, maxVal):
 	if len(nodesBySize) > 0:
 		maxDegree = len(nodesBySize[len(nodesBySize)-1].neighbors)
 		mv = maxDegree if maxDegree < maxVal else maxVal
-		graph.setBound(mv+1)
+		graph.set_bound(mv+1)
 
 
 # bubble sort works fast on semi-sorted lists
@@ -145,10 +235,10 @@ def reset(nodesBySize, graph, maxVal):
 # this changes a few nodes in the graph but not all nodes
 # so if we were to keep a sorted list of nodes based on the number of available colors for each node,
 # bubble sort would be a good candidate for re-sorting the list
-def bubbleSort(alist):
+def bubble_sort(alist):
     for passnum in range(len(alist)-1,0,-1):
         for i in range(passnum):
-            if len(alist[i].colorVals)<len(alist[i+1].colorVals) or (len(alist[i].colorVals)==len(alist[i+1].colorVals) and len(alist[i].neighbors)>len(alist[i+1].neighbors)):
+            if len(alist[i].color_vals)<len(alist[i+1].color_vals) or (len(alist[i].color_vals)==len(alist[i+1].color_vals) and len(alist[i].neighbors)>len(alist[i+1].neighbors)):
                 temp = alist[i]
                 alist[i] = alist[i+1]
                 alist[i+1] = temp
@@ -158,71 +248,70 @@ def baseline(graph, nodes):
 	while nodes:
 		node = nodes.pop()
 		if node.color == -1:
-			col = graph.nodes[node.name].nextColor()
+			col = graph.nodes[node.name].next_color()
 			graph.nodes[node.name].color = col
-			graph.pruneColors(node.name, node.color)
-		bubbleSort(nodes)
+			graph.prune_colors(node.name, node.color)
+		bubble_sort(nodes)
 	#print graph
 
 # clique-based method
-def cliqueBased(graph, nodes):
+def clique_based(graph, nodes):
 	while True:
-		clique = graph.nextClique()
+		clique = graph.next_clique()
 		if len(clique) <= 2:
-			bubbleSort(nodes)
+			bubble_sort(nodes)
 			baseline(graph, nodes)
 			break
-		graph.colorClique(clique, nodes)
+		graph.color_clique(clique, nodes)
 
-# bound-setter for the main method
-def boundSetter(graph, nodes):
-	while True:
-		clique = graph.nextClique()
-		if len(clique) <= 2:
-			break
-		graph.colorClique(clique, nodes)
-		bubbleSort(nodes)
 
-# the algorithm uses a clique-based parsing method to calculate a lower-bound and upper-bound for the graph's chromatic number
-# 	- lower-bound: size of the largest clique in the graph
-#	- upper-bound: size of the highest degree in the graph
-# then, beginning from the lower-bound, the algorithm traverses the search tree to find a proper coloring for the graph
-# whenever it runs out of options, it adds one color to the lower bound
-# whenever it exceeds the upper bound, it backtracks
-def search(graph, nodes, bound):
-	print 'trying to find an optimal solution for bound = ',bound - 1
-	# back up the curren graph and the current stack of nodes, so if the current run doesn't work, you can return the backups as the optimal answer
-	graphBackUp = copy.deepcopy(graph)
-	nodesBackUp = nodes[:]
-	# decrement the bound and try to find a coloring
-	graph.setBound(bound - 1)
-	boundSetter(graph, nodes)
-	while nodes:
-		# each node's 'parent' flag tells us which level it's currently in; to save time, we won't backtrack more than a constant number of levels
-		# this means the last proper coloring you found is the best coloring available within the bounds of the algorithm
-		currNode = nodes.pop()
-		if currNode.parent > graph.node_count:
-			break
-		# if you have any options left for the current node...
-		if len(currNode.colorVals) > 0:
-			# paint it with the next available color
-			currNode.color = currNode.nextColor()
-			# prune the colors from its neighbors
-			graph.pruneColors(currNode.name, currNode.color)
-			# set the parent of all remaining nodes to the current node, so you can backtrack later
-			currNode.parent -= 1
-			# re-order the remaining nodes so the ones with the fewest options are on top
-			bubbleSort(nodes)
-		#backtracking; reinsert node at the end of the stack and without changing the order, pick another node to color
+def temperature(old_t, alpha):
+	new_t = alpha * old_t
+	return new_t
+
+def iteration(old_alpha):
+	new_alpha = old_alpha + ((1.0 - old_alpha) * 9 / 10)
+	return new_alpha	
+
+def hot(old_cost, new_cost, t):
+	prob = math.exp(-(new_cost - old_cost)/t)
+	return random.random() <= prob
+
+def local_search(graph, current_bound):
+	graph.bound = current_bound
+	graph.populate_color_classes()
+	#graph.randomly_initialize()
+	min_graph = copy.deepcopy(graph)
+	min_cost = graph.current_cost	
+	alpha = 0.9
+	t = 1.5
+	i = 0
+	while t > 0.2:
+		print t
+		i += 1
+		old_cost = graph.current_cost
+		random_node = random.choice(graph.nodes)
+		old_color = random_node.color
+		new_color = random.choice(range(0, graph.bound))
+
+		graph.mutate(random_node, new_color)
+		new_cost = graph.current_cost
+
+		# print old_cost,'\t',new_cost
+
+		if new_cost < old_cost:
+			if new_cost < min_cost:
+				min_cost = new_cost
+				min_graph =  copy.deepcopy(graph)
+		elif hot(old_cost, new_cost, t):
+			print 'risking it'		
 		else:
-			# if you've run out of options for the current node, increment it's 'level-indicator' and put it back in the queue
-			currNode.parent += 1
-			nodes.insert(0, currNode)
-	# if the current round succeeded in finding a proper coloring, try a new round with a smaller bound
-	if graph.isSolved():
-		search(graph, nodesBackUp, graph.bound)
-	else:
-		return graphBackUp
+			graph.mutate(random_node, old_color)				
+		alpha = iteration(alpha)
+		t = temperature(t, alpha)
+	print i		
+	print min_graph.is_feasible()						
+	return min_graph	
 
 
 
@@ -232,7 +321,8 @@ def solve_it(input_data):
 	# parse the input
 	lines = input_data.split('\n')
 	#print input_data
-
+	# for l in lines:
+	# 	print l
 	first_line = lines[0].split()
 	node_count = int(first_line[0])
 	edge_count = int(first_line[1])
@@ -249,20 +339,23 @@ def solve_it(input_data):
 			graph.nodes[source.name] = source
 		if dest.name not in graph.nodes:
 			graph.nodes[dest.name] = dest
-		graph.nodes[source.name].neighbors.append(dest)
+		graph.nodes[source.name].neighbors.append(dest.name)
 		graph.nodes[source.name].ignore.append(False)
-		graph.nodes[dest.name].neighbors.append(source)
+		graph.nodes[dest.name].neighbors.append(source.name)
 		graph.nodes[dest.name].ignore.append(False)
 
 	# in addition to the graph, generate a sorted list of nodes which you can keep track of by the number of neighbors or by the number of remaining color values
-	nodesBySize = genNodes(graph)
+	nodesBySize = gen_nodes(graph)
 	nodesBySizeBackUp = nodesBySize[:]
 	reset(nodesBySize, graph, sys.maxint)	
 
 	# run a clique-coloring algorithm to come up with an initial upper bound for the graph
-	cliqueBased(graph, nodesBySize)
+	clique_based(graph, nodesBySize)
+
 	# use the baseline algorithm to come up with a starting point
-	graph = search(graph, nodesBySizeBackUp, graph.findMaxColors())
+	graph = local_search(graph, graph.find_max_colors() - 1)
+	# topDown(graph)
+
 
 	# build a trivial solution
 	# every node has its own color
